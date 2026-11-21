@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import eyes_shadow from '$lib/assets/background/eyes_shadow.png';
+	import eyes_bg from '$lib/assets/background/eyes_torn.jpg';
 	import tobecontinued from '$lib/assets/tobecontinued.png';
 	import ProjectCard from '$lib/components/ProjectCard.svelte';
 	import SEOMeta from '$lib/components/SEOMeta.svelte';
@@ -20,17 +20,16 @@
 />
 
 <div class="projects-bg-wrap md:hidden" class:projects-bg-wrap--in={visible}>
-	<img src={eyes_shadow} alt="" class="projects-bg-img bg-black opacity-35" aria-hidden="true" />
+	<img src={eyes_bg} alt="" class="projects-bg-img bg-black opacity-35" aria-hidden="true" />
 	<div class="projects-bg-fade"></div>
 </div>
 
 <div
-	class="fixed inset-x-0 top-16 bottom-0 z-0 hidden bg-black transition-opacity duration-700 ease-out md:block"
-	class:opacity-0={!visible}
-	class:opacity-100={visible}
+	class="projects-bg-desktop"
+	class:projects-bg-desktop--in={visible}
 >
-	<img src={eyes_shadow} alt="" class="h-full w-full bg-black object-cover object-center" aria-hidden="true" />
-	<div class="absolute inset-0 bg-linear-to-b from-black/30 via-black/50 to-black"></div>
+	<img src={eyes_bg} alt="" class="projects-bg-desktop-img" aria-hidden="true" />
+	<div class="projects-bg-desktop-overlay"></div>
 </div>
 
 <div class="hero-scanlines" aria-hidden="true"></div>
