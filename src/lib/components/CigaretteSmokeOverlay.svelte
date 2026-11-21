@@ -10,11 +10,9 @@
 	type Phase = 'idle' | 'lighting' | 'smoking' | 'dissolving';
 	let phase: Phase = $state('idle');
 
-	// Visual heat, opacity & displacement state
+	// Visual heat for natural ember glow
 	let emberHeat = $state(0); // 0 to 1
 	let emberFlickerScale = $state(1); // 0.94 to 1.06
-	let fumeOpacity = $state(0); // 0 to 1
-	let dispScale = $state(28); // Dynamic turbulence displacement scale (24 - 38)
 
 	// Timing trackers
 	let lightingStartTime = 0;
@@ -24,126 +22,255 @@
 
 	let animId: number | null = null;
 	let isLoopRunning = false;
+	let lastTimestamp = 0;
 
-	interface Ribbon {
-		id: number;
-		type: 'core' | 'mid' | 'veil';
-		stroke: string;
-		width: number;
-		baseOpacity: number;
-		speed: number;
-		freq1: number;
-		freq2: number;
-		amp: number;
-		windBias: number;
-		phase1: number;
-		phase2: number;
-		cycleDuration: number;
-		cycleStart: number;
-		d: string;
-	}
+	// Canvas dimensions & tip anchor inside the canvas
+	const CANVAS_WIDTH = 240;
+	const CANVAS_HEIGHT = 360;
+	const ANCHOR_X = 160; // 160px from left (allows 160px leftward drift)
+	const ANCHOR_Y = 328; // 328px from top (allows >300px upward rise)
 
-	function createRibbon(id: number, type: 'core' | 'mid' | 'veil', now: number): Ribbon {
-		if (type === 'core') {
-			return {
-				id,
-				type,
-				stroke: Math.random() > 0.4 ? '#FFFFFF' : '#F6F3ED',
-				width: 2.6 + Math.random() * 1.4, // 2.6px - 4.0px
-				baseOpacity: 0.72 + Math.random() * 0.12, // 0.72 - 0.84 for crisp, unmistakable core visibility
-				speed: 0.0034 + Math.random() * 0.0014,
-				freq1: 0.024 + Math.random() * 0.012,
-				freq2: 0.052 + Math.random() * 0.022,
-				amp: 7 + Math.random() * 6,
-				windBias: -12 - Math.random() * 10, // Natural upward-left drift
-				phase1: Math.random() * Math.PI * 2,
-				phase2: Math.random() * Math.PI * 2,
-				cycleDuration: 2800 + Math.random() * 1400,
-				cycleStart: now,
-				d: ''
-			};
-		} else if (type === 'mid') {
-			return {
-				id,
-				type,
-				stroke: '#EDEAE3',
-				width: 7.5 + Math.random() * 4.5, // 7.5px - 12.0px
-				baseOpacity: 0.42 + Math.random() * 0.1, // 0.42 - 0.52 for rich silky body
-				speed: 0.0022 + Math.random() * 0.0011,
-				freq1: 0.016 + Math.random() * 0.01,
-				freq2: 0.038 + Math.random() * 0.016,
-				amp: 13 + Math.random() * 9,
-				windBias: -14 - Math.random() * 12,
-				phase1: Math.random() * Math.PI * 2,
-				phase2: Math.random() * Math.PI * 2,
-				cycleDuration: 3400 + Math.random() * 1600,
-				cycleStart: now,
-				d: ''
-			};
-		} else {
-			return {
-				id,
-				type,
-				stroke: '#DBD5CA',
-				width: 18.0 + Math.random() * 6.0, // 18.0px - 24.0px
-				baseOpacity: 0.22 + Math.random() * 0.06, // 0.22 - 0.28 for soft ambient plume
-				speed: 0.0016 + Math.random() * 0.0008,
-				freq1: 0.012 + Math.random() * 0.007,
-				freq2: 0.026 + Math.random() * 0.012,
-				amp: 16 + Math.random() * 8,
-				windBias: -15 - Math.random() * 10,
-				phase1: Math.random() * Math.PI * 2,
-				phase2: Math.random() * Math.PI * 2,
-				cycleDuration: 4200 + Math.random() * 1800,
-				cycleStart: now,
-				d: ''
-			};
+	let canvasRef: HTMLCanvasElement | null = $state(null);
+	let ctx: CanvasRenderingContext2D | null = null;
+
+	// Pre-rendered offscreen sprite collections
+	let hazeSprites: HTMLCanvasElement[] = [];
+	let wispSprites: HTMLCanvasElement[] = [];
+	let warmSprites: HTMLCanvasElement[] = [];
+
+	function initSprites() {
+		if (hazeSprites.length > 0 || typeof document === 'undefined') return;
+
+		// 1. Soft outer haze sprites (96x96, muted warm-grey: rgba(190, 186, 178))
+		for (let s = 0; s < 4; s++) {
+			const off = document.createElement('canvas');
+			off.width = 96;
+			off.height = 96;
+			const octx = off.getContext('2d');
+			if (!octx) continue;
+
+			const half = 48;
+			const patchCount = s === 0 ? 6 : 9 + (s % 2);
+
+			octx.save();
+			octx.globalCompositeOperation = 'source-over';
+
+			for (let p = 0; p < patchCount; p++) {
+				const angle = (p / patchCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.8;
+				const dist = 4 + Math.random() * (s === 0 ? 10 : 18);
+				const cx = half + Math.cos(angle) * dist;
+				const cy = half + Math.sin(angle) * dist * (0.8 + Math.random() * 0.4);
+				const radius = 12 + Math.random() * (s === 0 ? 14 : 22);
+
+				const grad = octx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+				const alpha = 0.12 + Math.random() * 0.08;
+				grad.addColorStop(0, `rgba(190, 186, 178, ${alpha})`);
+				grad.addColorStop(0.45, `rgba(186, 182, 175, ${alpha * 0.6})`);
+				grad.addColorStop(0.8, `rgba(180, 176, 170, ${alpha * 0.15})`);
+				grad.addColorStop(1, 'rgba(175, 172, 168, 0)');
+
+				octx.fillStyle = grad;
+				octx.beginPath();
+				octx.arc(cx, cy, radius, 0, Math.PI * 2);
+				octx.fill();
+			}
+
+			// Destination-out cutouts for fibrous non-circular edges
+			if (s > 0) {
+				octx.globalCompositeOperation = 'destination-out';
+				const cutouts = 2 + (s % 2);
+				for (let c = 0; c < cutouts; c++) {
+					const cAngle = Math.random() * Math.PI * 2;
+					const cDist = 10 + Math.random() * 16;
+					const ccx = half + Math.cos(cAngle) * cDist;
+					const ccy = half + Math.sin(cAngle) * cDist;
+					const cRadius = 9 + Math.random() * 12;
+
+					const cGrad = octx.createRadialGradient(ccx, ccy, 0, ccx, ccy, cRadius);
+					cGrad.addColorStop(0, 'rgba(0, 0, 0, 0.45)');
+					cGrad.addColorStop(0.55, 'rgba(0, 0, 0, 0.2)');
+					cGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+					octx.fillStyle = cGrad;
+					octx.beginPath();
+					octx.arc(ccx, ccy, cRadius, 0, Math.PI * 2);
+					octx.fill();
+				}
+			}
+
+			octx.restore();
+			hazeSprites.push(off);
+		}
+
+		// 2. Thinner, sharper inner wisp trail sprites (64x64, rgba(215, 210, 202))
+		for (let s = 0; s < 2; s++) {
+			const off = document.createElement('canvas');
+			off.width = 64;
+			off.height = 64;
+			const octx = off.getContext('2d');
+			if (!octx) continue;
+
+			const half = 32;
+			octx.save();
+			octx.globalCompositeOperation = 'source-over';
+
+			// Elongated tight core filaments
+			for (let p = 0; p < 5; p++) {
+				const cx = half + (Math.random() - 0.5) * 8;
+				const cy = half + (Math.random() - 0.5) * 12;
+				const radius = 7 + Math.random() * 9;
+
+				const grad = octx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+				const alpha = 0.22 + Math.random() * 0.1;
+				grad.addColorStop(0, `rgba(215, 210, 202, ${alpha})`);
+				grad.addColorStop(0.4, `rgba(205, 200, 192, ${alpha * 0.55})`);
+				grad.addColorStop(0.85, `rgba(195, 190, 182, ${alpha * 0.12})`);
+				grad.addColorStop(1, 'rgba(190, 185, 178, 0)');
+
+				octx.fillStyle = grad;
+				octx.beginPath();
+				octx.arc(cx, cy, radius, 0, Math.PI * 2);
+				octx.fill();
+			}
+
+			octx.restore();
+			wispSprites.push(off);
+		}
+
+		// 3. Warm base tint sprites for the first 20px off cherry (64x64, rgba(255, 175, 105))
+		for (let s = 0; s < 2; s++) {
+			const off = document.createElement('canvas');
+			off.width = 64;
+			off.height = 64;
+			const octx = off.getContext('2d');
+			if (!octx) continue;
+
+			const half = 32;
+			octx.save();
+			octx.globalCompositeOperation = 'source-over';
+
+			for (let p = 0; p < 4; p++) {
+				const cx = half + (Math.random() - 0.5) * 6;
+				const cy = half + (Math.random() - 0.5) * 8;
+				const radius = 6 + Math.random() * 8;
+
+				const grad = octx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+				const alpha = 0.2 + Math.random() * 0.08;
+				grad.addColorStop(0, `rgba(255, 175, 105, ${alpha})`);
+				grad.addColorStop(0.45, `rgba(255, 140, 70, ${alpha * 0.5})`);
+				grad.addColorStop(0.85, `rgba(255, 110, 40, ${alpha * 0.1})`);
+				grad.addColorStop(1, 'rgba(255, 100, 30, 0)');
+
+				octx.fillStyle = grad;
+				octx.beginPath();
+				octx.arc(cx, cy, radius, 0, Math.PI * 2);
+				octx.fill();
+			}
+
+			octx.restore();
+			warmSprites.push(off);
 		}
 	}
 
-	function reRandomizeRibbon(r: Ribbon, now: number) {
-		const fresh = createRibbon(r.id, r.type, now);
-		r.stroke = fresh.stroke;
-		r.width = fresh.width;
-		r.baseOpacity = fresh.baseOpacity;
-		r.speed = fresh.speed;
-		r.freq1 = fresh.freq1;
-		r.freq2 = fresh.freq2;
-		r.amp = fresh.amp;
-		r.windBias = fresh.windBias;
-		r.phase1 = fresh.phase1;
-		r.phase2 = fresh.phase2;
-		r.cycleDuration = fresh.cycleDuration;
-		r.cycleStart = now;
+	interface SmokeParticle {
+		type: 'haze' | 'wisp';
+		x: number;
+		y: number;
+		vx: number;
+		vy: number;
+		age: number;
+		maxLife: number;
+		radius: number;
+		startRadius: number;
+		endRadius: number;
+		angle: number;
+		spin: number;
+		spriteIdx: number;
+		aspectRatio: number;
+		peakAlpha: number;
 	}
 
-	// 7 independent overlapping ribbons: 3 core tendrils, 3 mid wisps, 1 soft outer haze veil
-	let ribbons: Ribbon[] = $state([
-		createRibbon(0, 'core', 0),
-		createRibbon(1, 'core', 120),
-		createRibbon(2, 'core', 200),
-		createRibbon(3, 'mid', 280),
-		createRibbon(4, 'mid', 380),
-		createRibbon(5, 'mid', 480),
-		createRibbon(6, 'veil', 600)
-	]);
+	interface Spark {
+		x: number;
+		y: number;
+		vx: number;
+		vy: number;
+		age: number;
+		maxLife: number; // 0.8s - 1.4s
+		size: number; // 1.0px - 1.8px
+		color: string; // '#FF9E3D' or '#FFD28A'
+		twinkleSeed: number;
+	}
 
-	function buildSmoothPath(points: { x: number; y: number }[]): string {
-		if (points.length < 2) return '';
-		let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-		for (let i = 1; i < points.length - 1; i++) {
-			const xc = (points[i].x + points[i + 1].x) / 2;
-			const yc = (points[i].y + points[i + 1].y) / 2;
-			d += ` Q ${points[i].x.toFixed(1)} ${points[i].y.toFixed(1)} ${xc.toFixed(1)} ${yc.toFixed(1)}`;
+	let particles: SmokeParticle[] = [];
+	let sparks: Spark[] = [];
+	let spawnAccumulator = 0;
+	let sparkAccumulator = 0;
+	let nextSparkInterval = 0.45; // 350ms - 700ms
+
+	function spawnParticle(): SmokeParticle {
+		// ~38% thin inner wisp trail, ~62% soft outer haze
+		const isWisp = Math.random() < 0.38;
+
+		// Spawn nearly vertically right at the tip anchor with minimal sub-pixel jitter
+		const x = ANCHOR_X + (Math.random() - 0.5) * (isWisp ? 1.2 : 2.2);
+		const y = ANCHOR_Y + (Math.random() - 0.5) * 1.4;
+
+		const maxLife = isWisp ? 2.5 + Math.random() * 0.6 : 2.8 + Math.random() * 0.7;
+		const startRadius = isWisp ? 2.2 + Math.random() * 0.9 : 3.4 + Math.random() * 1.8;
+		const endRadius = isWisp ? 26 + Math.random() * 10 : 58 + Math.random() * 12;
+
+		return {
+			type: isWisp ? 'wisp' : 'haze',
+			x,
+			y,
+			// Initial launch is nearly vertical (vx ≈ 0)
+			vx: (Math.random() - 0.5) * 0.06,
+			vy: -1.25 - Math.random() * 0.3,
+			age: 0,
+			maxLife,
+			radius: startRadius,
+			startRadius,
+			endRadius,
+			angle: Math.random() * Math.PI * 2,
+			spin: (Math.random() - 0.5) * (isWisp ? 0.45 : 0.32),
+			spriteIdx: Math.floor(Math.random() * (isWisp ? 2 : 4)),
+			aspectRatio: isWisp ? 1.4 + Math.random() * 0.45 : 1.1 + Math.random() * 0.25,
+			// Inner wisp trail has slightly higher contrast (0.038 - 0.052), outer haze is very subtle (0.020 - 0.028)
+			peakAlpha: isWisp ? 0.038 + Math.random() * 0.014 : 0.021 + Math.random() * 0.007
+		};
+	}
+
+	function spawnSpark(): Spark {
+		const isLight = Math.random() < 0.45;
+		return {
+			x: ANCHOR_X + (Math.random() - 0.5) * 2.0,
+			y: ANCHOR_Y - 1 - Math.random() * 2,
+			vx: (Math.random() - 0.5) * 0.35,
+			vy: -0.9 - Math.random() * 0.55,
+			age: 0,
+			maxLife: 0.8 + Math.random() * 0.6, // 0.8s - 1.4s
+			size: 1.0 + Math.random() * 0.8, // 1.0px - 1.8px
+			color: isLight ? '#FFD28A' : '#FF9E3D',
+			twinkleSeed: Math.random() * 100
+		};
+	}
+
+	function setupCanvas() {
+		if (!canvasRef) return;
+		const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+		canvasRef.width = Math.round(CANVAS_WIDTH * dpr);
+		canvasRef.height = Math.round(CANVAS_HEIGHT * dpr);
+		ctx = canvasRef.getContext('2d');
+		if (ctx) {
+			ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		}
-		const last = points[points.length - 1];
-		d += ` L ${last.x.toFixed(1)} ${last.y.toFixed(1)}`;
-		return d;
 	}
 
 	function startAnimationLoop() {
 		if (isLoopRunning) return;
 		isLoopRunning = true;
+		lastTimestamp = performance.now();
 		animId = requestAnimationFrame(loop);
 	}
 
@@ -157,9 +284,17 @@
 
 	function loop(timestamp: number) {
 		if (phase === 'idle') {
+			if (ctx) {
+				ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+			}
+			particles = [];
+			sparks = [];
 			stopAnimationLoop();
 			return;
 		}
+
+		const dt = Math.min(0.064, Math.max(0.001, (timestamp - lastTimestamp) / 1000));
+		lastTimestamp = timestamp;
 
 		// State 1: 3.5s Lighting ramp-up (exact ease-in curve + heat flicker)
 		if (phase === 'lighting') {
@@ -173,18 +308,30 @@
 				const flicker = Math.sin(timestamp * 0.035) * 0.07 + Math.cos(timestamp * 0.05) * 0.04;
 				heat = Math.min(1, Math.max(0, heat + flicker));
 				emberFlickerScale = 1 + Math.sin(timestamp * 0.04) * 0.06;
+
+				// Lightly spawn an occasional micro-spark during final second
+				sparkAccumulator += dt;
+				if (sparkAccumulator >= nextSparkInterval) {
+					sparks.push(spawnSpark());
+					sparkAccumulator = 0;
+					nextSparkInterval = 0.5 + Math.random() * 0.35;
+				}
 			} else {
 				emberFlickerScale = 1;
 			}
 
 			emberHeat = heat;
-			fumeOpacity = 0; // Strictly zero fumes during the 3.5s lighting phase
+
+			// Strictly ZERO smoke renders during the 3.5s lighting phase
+			if (ctx) {
+				ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+			}
+			particles = [];
 
 			if (elapsed >= 3500) {
 				// Exact 3.5s elapses: ignite cigarette and begin continuous fumes
 				phase = 'smoking';
 				emberHeat = 1;
-				fumeOpacity = 1;
 			}
 		}
 
@@ -192,7 +339,14 @@
 		else if (phase === 'smoking') {
 			emberHeat = 0.92 + Math.sin(timestamp * 0.025) * 0.08;
 			emberFlickerScale = 1 + Math.sin(timestamp * 0.03) * 0.05;
-			fumeOpacity = 1;
+
+			// Occasional micro-spark every 350ms - 700ms
+			sparkAccumulator += dt;
+			if (sparkAccumulator >= nextSparkInterval) {
+				sparks.push(spawnSpark());
+				sparkAccumulator = 0;
+				nextSparkInterval = 0.35 + Math.random() * 0.35;
+			}
 		}
 
 		// State 3: Exactly 1.3s gradual dissolve
@@ -201,59 +355,174 @@
 			const progress = Math.min(1, elapsed / 1300);
 			const fade = 1 - progress;
 
-			fumeOpacity = fade;
 			emberHeat = fade;
 			emberFlickerScale = 1;
 
 			if (elapsed >= 1300) {
 				phase = 'idle';
-				fumeOpacity = 0;
 				emberHeat = 0;
+				if (ctx) {
+					ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+				}
+				particles = [];
+				sparks = [];
 				stopAnimationLoop();
 				return;
 			}
 		}
 
-		// Generate organic fume ribbons when smoking or dissolving
-		if (phase === 'smoking' || phase === 'dissolving') {
+		// Update and render canvas smoke particles & sparks
+		if (ctx) {
 			const prefersReducedMotion =
 				typeof window !== 'undefined' &&
 				window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-			if (!prefersReducedMotion) {
-				// Subtly drift turbulence displacement scale (24 - 38)
-				dispScale = 29 + Math.sin(timestamp * 0.0011) * 5.5 + Math.cos(timestamp * 0.0021) * 3;
+			if (prefersReducedMotion) {
+				ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+				particles = [];
+				sparks = [];
+			} else {
+				// 1. Particle Spawning (Smoking phase only)
+				if (phase === 'smoking') {
+					spawnAccumulator += dt * 44; // ~44 particles/sec
+					while (spawnAccumulator >= 1 && particles.length < 135) {
+						particles.push(spawnParticle());
+						spawnAccumulator -= 1;
+					}
+				}
 
-				const stepCount = 30;
-				const stepY = (250 - 10) / stepCount;
+				// 2. Clear canvas
+				ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+				ctx.globalCompositeOperation = 'source-over';
 
-				for (let rIdx = 0; rIdx < ribbons.length; rIdx++) {
-					const r = ribbons[rIdx];
+				// 3. Dissolve factor for smooth fadeout
+				let dissolveMultiplier = 1;
+				if (phase === 'dissolving') {
+					const dissolveElapsed = timestamp - dissolvingStartTime;
+					dissolveMultiplier = Math.max(0, 1 - dissolveElapsed / 1300);
+				}
 
-					// Check if ribbon has completed its cycle; re-randomize if so
-					if (timestamp - r.cycleStart > r.cycleDuration) {
-						reRandomizeRibbon(r, timestamp);
+				// 4. Update and draw each smoke particle
+				for (let i = particles.length - 1; i >= 0; i--) {
+					const p = particles[i];
+					p.age += dt;
+					const normAge = p.age / p.maxLife;
+
+					if (normAge >= 1) {
+						particles.splice(i, 1);
+						continue;
 					}
 
-					const points: { x: number; y: number }[] = [];
-					for (let step = 0; step <= stepCount; step++) {
-						const y = 250 - step * stepY;
-						const dist = 250 - y; // 0 at tip, 240 at top
-						const distNorm = dist / 240;
+					// Rise distance from tip
+					const riseY = ANCHOR_Y - p.y; // 0 at tip, ~260 at top
 
-						// Tightly bound at tip (distNorm -> 0), expanding naturally as it rises
-						const curlScale = Math.pow(distNorm, 0.82);
-						const sway1 =
-							Math.sin(dist * r.freq1 + timestamp * r.speed + r.phase1) * (r.amp * curlScale);
-						const sway2 =
-							Math.sin(dist * r.freq2 - timestamp * r.speed * 0.65 + r.phase2) *
-							(r.amp * 0.38 * curlScale);
-						const drift = r.windBias * Math.pow(distNorm, 1.25);
+					// Natural laminar rise: slight right-then-left curve for the first 30-45px
+					const laminarCurve = Math.sin(riseY * 0.08) * 0.14 - (riseY / 42) * 0.2;
 
-						const x = 90 + drift + sway1 + sway2;
-						points.push({ x, y });
+					// Smooth turbulence ramp-up above 38px
+					const turb = Math.min(1, Math.max(0, (riseY - 38) / 48));
+
+					// Multi-octave curl wind field
+					const f1 = Math.sin(p.y * 0.024 + timestamp * 0.002 + p.x * 0.014);
+					const f2 = Math.cos(p.y * 0.048 - timestamp * 0.0016 + p.x * 0.022);
+					const f3 = Math.sin(p.y * 0.09 + timestamp * 0.0034);
+
+					// Gentle upward-left drift
+					const curlX = -0.42 + (f1 * 0.72 + f2 * 0.42 + f3 * 0.22);
+					const curlY = -1.36 + (f1 * 0.14 + f2 * 0.08) + normAge * 0.52;
+
+					// Combine laminar path and curl turbulence
+					const targetVx = laminarCurve * (1 - turb) + curlX * turb;
+					const targetVy = -1.34 * (1 - turb) + curlY * turb;
+
+					// Wisps hug the streamline tighter than diffuse haze
+					const trackSpeed = p.type === 'wisp' ? 0.16 : 0.11;
+					p.vx += (targetVx - p.vx) * trackSpeed;
+					p.vy += (targetVy - p.vy) * trackSpeed;
+					p.x += p.vx * (dt * 60);
+					p.y += p.vy * (dt * 60);
+					p.angle += p.spin * dt;
+
+					// Radius expansion
+					const expansion = Math.pow(normAge, p.type === 'wisp' ? 0.85 : 0.76);
+					p.radius = p.startRadius + (p.endRadius - p.startRadius) * expansion;
+
+					// Bell-curve alpha: rises quickly from 0, stays subtle, fades to 0
+					let alpha: number;
+					if (normAge < 0.15) {
+						alpha = (normAge / 0.15) * p.peakAlpha;
+					} else if (normAge < 0.48) {
+						alpha = p.peakAlpha;
+					} else {
+						const fadeNorm = (normAge - 0.48) / 0.52;
+						alpha = p.peakAlpha * Math.max(0, 1 - Math.pow(fadeNorm, 1.25));
 					}
-					r.d = buildSmoothPath(points);
+
+					alpha *= dissolveMultiplier;
+
+					if (alpha > 0.001) {
+						const dSize = p.radius * 2;
+						const spriteList = p.type === 'wisp' ? wispSprites : hazeSprites;
+						const sprite = spriteList[p.spriteIdx % spriteList.length];
+
+						// Warm ember bounce: for the first 20px off cherry, blend tint warm
+						const warmth = Math.max(0, 1 - riseY / 22);
+
+						ctx.save();
+						ctx.translate(p.x, p.y);
+						ctx.rotate(p.angle);
+						ctx.scale(1, p.aspectRatio);
+
+						// Render warm ember reflection if near tip
+						if (warmth > 0 && warmSprites.length > 0) {
+							const warmSprite = warmSprites[p.spriteIdx % warmSprites.length];
+							ctx.globalAlpha = alpha * warmth * 0.85;
+							ctx.drawImage(warmSprite, -p.radius, -p.radius, dSize, dSize);
+						}
+
+						// Render primary smoke sprite
+						if (sprite) {
+							ctx.globalAlpha = alpha * (1 - warmth * 0.45);
+							ctx.drawImage(sprite, -p.radius, -p.radius, dSize, dSize);
+						}
+
+						ctx.restore();
+					}
+				}
+
+				// 5. Update and render occasional micro-sparks
+				for (let i = sparks.length - 1; i >= 0; i--) {
+					const s = sparks[i];
+					s.age += dt;
+					const sProgress = s.age / s.maxLife;
+
+					if (sProgress >= 1) {
+						sparks.splice(i, 1);
+						continue;
+					}
+
+					// Drifts slowly upward with the smoke curl
+					const curlWind = Math.sin(s.y * 0.03 + timestamp * 0.002) * 0.28 - 0.22;
+					s.vx += (curlWind - s.vx) * 0.08;
+					s.x += s.vx * (dt * 60);
+					s.y += s.vy * (dt * 60);
+
+					// Soft fade out over 0.8s - 1.4s with subtle organic twinkle
+					const baseAlpha = Math.max(0, 1 - sProgress);
+					const twinkle = 0.85 + Math.sin(timestamp * 0.02 + s.twinkleSeed) * 0.15;
+					const sparkAlpha = Math.pow(baseAlpha, 1.4) * twinkle * dissolveMultiplier;
+
+					if (sparkAlpha > 0.01) {
+						ctx.save();
+						ctx.globalAlpha = sparkAlpha * 0.9;
+						ctx.fillStyle = s.color;
+						ctx.shadowColor = s.color;
+						ctx.shadowBlur = 3;
+						ctx.beginPath();
+						ctx.arc(s.x, s.y, s.size / 2, 0, Math.PI * 2);
+						ctx.fill();
+						ctx.restore();
+					}
 				}
 			}
 		}
@@ -271,7 +540,6 @@
 			// Desktop: start exact 3.5s lighting ramp-up
 			phase = 'lighting';
 			lightingStartTime = performance.now();
-			fumeOpacity = 0;
 			startAnimationLoop();
 		}
 	}
@@ -281,9 +549,13 @@
 			if (phase === 'lighting') {
 				// Canceled before 3.5s: cool down ember over 500ms, emit zero fumes
 				phase = 'idle';
-				fumeOpacity = 0;
 				emberHeat = 0;
 				emberFlickerScale = 1;
+				if (ctx) {
+					ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+				}
+				particles = [];
+				sparks = [];
 				stopAnimationLoop();
 			} else if (phase === 'smoking') {
 				// Finished smoking: transition to exact 1.3s gradual dissolve
@@ -301,7 +573,6 @@
 			// Mobile: quick flare (400ms), 3500ms fumes, then 1300ms dissolve
 			phase = 'smoking';
 			emberHeat = 1;
-			fumeOpacity = 1;
 			startAnimationLoop();
 
 			mobileBurstTimer = setTimeout(() => {
@@ -326,93 +597,38 @@
 		// Strict guarantee: on page load, 100% idle, zero smoke, zero ember glow, zero timers
 		phase = 'idle';
 		emberHeat = 0;
-		fumeOpacity = 0;
+		initSprites();
+		setupCanvas();
+
+		const handleResize = () => {
+			setupCanvas();
+		};
+		window.addEventListener('resize', handleResize);
 
 		return () => {
 			stopAnimationLoop();
+			window.removeEventListener('resize', handleResize);
 			if (mobileBurstTimer) clearTimeout(mobileBurstTimer);
 			if (cancelCooldownTimer) clearTimeout(cancelCooldownTimer);
 		};
 	});
 </script>
 
-<!-- Real Cigarette Fumes rendered via SVG Turbulence & Displacement Filter (Zero bubbles, zero circles) -->
-<svg
-	class="pointer-events-none select-none absolute z-[6]"
+<!-- Subtle Volumetric Smoke Canvas (Zero hard cuts, soft grey ink mist) -->
+<canvas
+	bind:this={canvasRef}
+	class="smoke-canvas pointer-events-none select-none absolute z-[6]"
 	style="
-		left: calc({TIP_X}% - 90px);
-		top: calc({TIP_Y}% - 250px);
-		width: 180px;
-		height: 260px;
+		left: calc({TIP_X}% - {ANCHOR_X}px);
+		top: calc({TIP_Y}% - {ANCHOR_Y}px);
+		width: {CANVAS_WIDTH}px;
+		height: {CANVAS_HEIGHT}px;
 		pointer-events: none;
 		user-select: none;
 		-webkit-user-select: none;
-		opacity: {fumeOpacity};
-		transition: opacity {phase === 'smoking' ? '400ms' : phase === 'dissolving' ? '1300ms' : '200ms'} ease-out;
 	"
-	viewBox="0 0 180 260"
 	aria-hidden="true"
->
-	<defs>
-		<!-- SVG displacement filter simulating atmospheric smoke turbulence -->
-		<filter
-			id="cig-fume-filter"
-			filterUnits="userSpaceOnUse"
-			x="-50"
-			y="-50"
-			width="280"
-			height="360"
-		>
-			<feTurbulence
-				type="fractalNoise"
-				baseFrequency="0.014 0.028"
-				numOctaves="3"
-				seed="7"
-				result="noise"
-			/>
-			<feDisplacementMap
-				in="SourceGraphic"
-				in2="noise"
-				scale={dispScale}
-				xChannelSelector="R"
-				yChannelSelector="G"
-				result="displaced"
-			/>
-			<feGaussianBlur in="displaced" stdDeviation="1.15" />
-		</filter>
-
-		<!-- Smooth vertical fade mask so fumes emerge seamlessly from tip and feather cleanly at boundaries -->
-		<linearGradient id="cig-fume-mask-v" x1="0" y1="260" x2="0" y2="0" gradientUnits="userSpaceOnUse">
-			<stop offset="0%" stop-color="black" />
-			<stop offset="2%" stop-color="black" />
-			<stop offset="7%" stop-color="white" />
-			<stop offset="78%" stop-color="white" />
-			<stop offset="92%" stop-color="rgba(255,255,255,0.5)" />
-			<stop offset="100%" stop-color="black" />
-		</linearGradient>
-
-		<mask id="cig-fume-mask">
-			<rect x="0" y="0" width="180" height="260" fill="url(#cig-fume-mask-v)" />
-		</mask>
-	</defs>
-
-	<!-- Continuous curling fume ribbons (7 overlapping paths with enhanced contrast and silky presence) -->
-	<g mask="url(#cig-fume-mask)">
-		<g filter="url(#cig-fume-filter)" class="drop-shadow-[0_0_6px_rgba(255,255,255,0.18)]">
-			{#each ribbons as ribbon (ribbon.id)}
-				<path
-					d={ribbon.d}
-					fill="none"
-					stroke={ribbon.stroke}
-					stroke-width={ribbon.width}
-					stroke-opacity={ribbon.baseOpacity}
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				/>
-			{/each}
-		</g>
-	</g>
-</svg>
+></canvas>
 
 <!-- Organic Soft Heat Bloom (Zero visible circular edge, zero donut ring, natural glowing cherry ash) -->
 <div
@@ -497,6 +713,15 @@
 ></button>
 
 <style>
+	.smoke-canvas {
+		mask-image: linear-gradient(to top, black 0%, black 62%, transparent 98%),
+			linear-gradient(to right, transparent 0%, black 14%, black 86%, transparent 100%);
+		-webkit-mask-image: linear-gradient(to top, black 0%, black 62%, transparent 98%),
+			linear-gradient(to right, transparent 0%, black 14%, black 86%, transparent 100%);
+		mask-composite: intersect;
+		-webkit-mask-composite: source-in;
+	}
+
 	/* Expand mobile tap target to 44px */
 	@media (max-width: 768px) {
 		.lighter-hotspot {

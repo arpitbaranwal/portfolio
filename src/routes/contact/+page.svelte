@@ -454,3 +454,18 @@
 		style="transition-delay: 500ms;"
 	></div>
 </div>
+
+<style>
+	input:-webkit-autofill,
+	input:-webkit-autofill:hover,
+	input:-webkit-autofill:focus,
+	textarea:-webkit-autofill,
+	textarea:-webkit-autofill:hover,
+	textarea:-webkit-autofill:focus {
+		-webkit-box-shadow: 0 0 0 1000px #0d0d0d inset !important;
+		box-shadow: 0 0 0 1000px #0d0d0d inset !important;
+		-webkit-text-fill-color: #f3f3f3 !important;
+		caret-color: #f3f3f3 !important;
+		transition: background-color 5000s ease-in-out 0s;
+	}
+</style>

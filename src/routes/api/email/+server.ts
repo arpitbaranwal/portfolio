@@ -11,9 +11,13 @@ interface Payload {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	const { MAIL_SMTP_HOST, MAIL_SMTP_PORT, MAIL_SMTP_PASS, MAIL_SMTP_USER } = env;
+	const host = env.MAIL_SMTP_HOST?.trim();
+	const portRaw = env.MAIL_SMTP_PORT?.trim();
+	const user = env.MAIL_SMTP_USER?.trim();
+	const pass = env.MAIL_SMTP_PASS?.trim();
+	const toEmail = env.CONTACT_TO_EMAIL?.trim() || user;
 
-	if (!MAIL_SMTP_HOST || !MAIL_SMTP_PORT || !MAIL_SMTP_USER || !MAIL_SMTP_PASS) {
+	if (!host || !portRaw || !user || !pass) {
 		return json(
 			{
 				success: false,
@@ -37,32 +41,35 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	try {
-		const port = parseInt(MAIL_SMTP_PORT, 10);
+		const port = Number(portRaw || 465);
 		const transporter = nodemailer.createTransport({
-			host: MAIL_SMTP_HOST,
+			host,
 			port,
 			secure: port === 465,
 			auth: {
-				user: MAIL_SMTP_USER,
-				pass: MAIL_SMTP_PASS
+				user,
+				pass
 			}
 		});
 
 		await transporter.sendMail({
-			from: '"Contact Page - " <valance.dev>',
-			to: 'arpitbaranwal05@gmail.com',
+			from: `"VALANCE Portfolio" <${user}>`,
+			to: toEmail,
+			replyTo: data.email,
 			subject: data.subject,
 			text: `${data.name} (${data.email})\n\n${data.content}`
 		});
+
 		return json({
 			success: true
 		});
 	} catch (err) {
-		console.error(err);
+		console.error('[api/email]', err);
+		const errorMessage = err instanceof Error ? err.message : String(err);
 		return json(
 			{
 				success: false,
-				error: 'Failed to send email.'
+				error: import.meta.env.DEV ? `Failed to send email: ${errorMessage}` : 'Failed to send email.'
 			},
 			{ status: 500 }
 		);
