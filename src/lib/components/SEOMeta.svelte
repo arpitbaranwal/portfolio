@@ -11,7 +11,7 @@
 		path = '/'
 	}: Props = $props();
 
-	const url = `https://valance.dev${path}`;
+	const url = $derived(`https://valance.dev${path}`);
 	const keywords =
 		'Arpit, Arpit Baranwal, valance, valance.dev, developer, portfolio, AI/ML, python, backend, RAG, svelte';
 </script>
